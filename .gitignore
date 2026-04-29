@@ -1,6 +1,8 @@
 .idea/
 .vscode/
+.claude/
 .DS_Store
 *~
 *.orig
 *.rej
+CLAUDE.md

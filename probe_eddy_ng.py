@@ -13,6 +13,7 @@ import logging
 import math
 import bisect
 import re
+import tempfile
 import traceback
 import pickle
 import base64
@@ -33,32 +34,18 @@ from typing import (
     final,
 )
 
-try:
-    from klippy import mcu, pins, chelper
-    from klippy.printer import Printer
-    from klippy.configfile import ConfigWrapper
-    from klippy.configfile import error as configerror
-    from klippy.gcode import GCodeCommand
-    from klippy.toolhead import ToolHead
-    from klippy.extras import probe, manual_probe, bed_mesh
-    from klippy.extras.homing import HomingMove
+import mcu
+import pins
+import chelper
+from klippy import Printer
+from configfile import ConfigWrapper
+from configfile import error as configerror
+from gcode import GCodeCommand
+from toolhead import ToolHead
+from . import probe, manual_probe, bed_mesh
+from .homing import HomingMove
 
-    IS_KALICO = True
-    HAS_PROBE_RESULT_TYPE = False
-except ImportError:
-    import mcu
-    import pins
-    import chelper
-    from klippy import Printer
-    from configfile import ConfigWrapper
-    from configfile import error as configerror
-    from gcode import GCodeCommand
-    from toolhead import ToolHead
-    from . import probe, manual_probe, bed_mesh
-    from .homing import HomingMove
-
-    IS_KALICO = False
-    HAS_PROBE_RESULT_TYPE = hasattr(manual_probe, "ProbeResult")
+HAS_PROBE_RESULT_TYPE = hasattr(manual_probe, "ProbeResult")
 
 from . import ldc1612_ng
 
@@ -278,8 +265,8 @@ class ProbeEddyParams:
             return None
         try:
             return [float(v) for v in re.split(r"\s*,\s*|\s+", s)]
-        except:
-            raise configerror(f"Can't parse '{s}' as list of floats")
+        except ValueError as e:
+            raise configerror(f"Can't parse '{s}' as list of floats: {e}")
 
     def is_default_butter_config(self):
         return self.tap_butter_lowcut == 5.0 and self.tap_butter_highcut == 25.0 and self.tap_butter_order == 2
@@ -438,17 +425,10 @@ class ProbeEddy:
         self._full_name = config.get_name()
         self._name = self._full_name.split()[-1]
 
-        sensors = {
-            "ldc1612": ldc1612_ng.LDC1612_ng,
-            "btt_eddy": ldc1612_ng.LDC1612_ng,
-            "cartographer": ldc1612_ng.LDC1612_ng,
-            "mellow_fly": ldc1612_ng.LDC1612_ng,
-            "ldc1612_internal_clk": ldc1612_ng.LDC1612_ng,
-        }
-        sensor_type = config.getchoice("sensor_type", {s: s for s in sensors})
+        sensor_type = config.getchoice("sensor_type", {"btt_eddy": "btt_eddy"})
 
         self._sensor_type = sensor_type
-        self._sensor = sensors[sensor_type](config)
+        self._sensor = ldc1612_ng.LDC1612_ng(config)
         self._mcu = self._sensor.get_mcu()
         self._toolhead: ToolHead = None  # filled in _handle_connect
         self._trapq = None
@@ -466,6 +446,8 @@ class ProbeEddy:
         old_saved_reg_drive_current = asfc.getint(self._full_name, "saved_reg_drive_current", fallback=0)
         old_saved_tap_drive_current = asfc.getint(self._full_name, "saved_tap_drive_current", fallback=0)
 
+        # Precedence (first non-zero wins): explicit config value, legacy autosaved
+        # value, sensor default. A config value of 0 (or unset) means "fall through".
         self._reg_drive_current = self.params.reg_drive_current or old_saved_reg_drive_current or self._sensor._drive_current
         self._tap_drive_current = self.params.tap_drive_current or old_saved_tap_drive_current or self._reg_drive_current
 
@@ -521,11 +503,7 @@ class ProbeEddy:
 
         self._bed_mesh_helper = BedMeshScanHelper(self, config)
 
-        # TODO: get rid of this
-        if hasattr(probe, "ProbeCommandHelper"):
-            self._cmd_helper = probe.ProbeCommandHelper(config, self, self._endstop_wrapper.query_endstop)
-        else:
-            self._cmd_helper = None
+        self._cmd_helper = probe.ProbeCommandHelper(config, self, self._endstop_wrapper.query_endstop)
 
         # when doing a scan, what's the offset between probe readings at the bed
         # scan height and the accurate bed height, based on the last tap.
@@ -542,9 +520,8 @@ class ProbeEddy:
         self._printer.register_event_handler("gcode:command_error", self._handle_command_error)
         self._printer.register_event_handler("klippy:connect", self._handle_connect)
 
-        # patch bed_mesh because Klipper
-        if not IS_KALICO:
-            bed_mesh.ProbeManager.start_probe = bed_mesh_ProbeManager_start_probe_override
+        # patch bed_mesh.ProbeManager so it routes eddy probes through rapid_scan
+        bed_mesh.ProbeManager.start_probe = bed_mesh_ProbeManager_start_probe_override
 
     def _log_error(self, msg):
         logging.error(f"{self._name}: {msg}")
@@ -651,7 +628,7 @@ class ProbeEddy:
         try:
             if self._sampler is not None:
                 self._sampler.finish()
-        except:
+        except Exception:
             logging.exception("EDDYng handle_command_error: sampler.finish() failed")
 
     def _handle_connect(self):
@@ -1087,8 +1064,15 @@ class ProbeEddy:
         # Now reset the axis so that we have a full range to calibrate with
         th = self._printer.lookup_object("toolhead")
         th_pos = th.get_position()
-        # XXX This is proably not correct for some printers?
-        zrange = th.get_kinematics().rails[2].get_range()
+        kin = th.get_kinematics()
+        # rails[2] == Z rail group only for cartesian/corexy/corexz kinematics.
+        # Anything else (delta, polar, scara, idex, etc.) needs a different lookup.
+        if type(kin).__name__ not in ("CartKinematics", "CoreXYKinematics", "CoreXZKinematics"):
+            raise self._printer.command_error(
+                f"EDDYng calibration: unsupported kinematics '{type(kin).__name__}'. "
+                "Only cartesian, corexy, and corexz are supported."
+            )
+        zrange = kin.rails[2].get_range()
         th_pos[2] = zrange[1] - 20.0
         self._set_toolhead_position(th_pos, [2])
 
@@ -1247,8 +1231,15 @@ class ProbeEddy:
         # Now reset the axis so that we have a full range to calibrate with
         th = self._printer.lookup_object("toolhead")
         th_pos = th.get_position()
-        # XXX This is proably not correct for some printers?
-        zrange = th.get_kinematics().rails[2].get_range()
+        kin = th.get_kinematics()
+        # rails[2] == Z rail group only for cartesian/corexy/corexz kinematics.
+        # Anything else (delta, polar, scara, idex, etc.) needs a different lookup.
+        if type(kin).__name__ not in ("CartKinematics", "CoreXYKinematics", "CoreXZKinematics"):
+            raise self._printer.command_error(
+                f"EDDYng calibration: unsupported kinematics '{type(kin).__name__}'. "
+                "Only cartesian, corexy, and corexz are supported."
+            )
+        zrange = kin.rails[2].get_range()
         th_pos[2] = zrange[1] - 20.0
         self._set_toolhead_position(th_pos, [2])
 
@@ -2042,8 +2033,9 @@ class ProbeEddy:
             filename_base = "tap"
         else:
             filename_base = f"tap-{tapnum+1}"
-        tapplot_path_png = f"/tmp/{filename_base}.png"
-        tapplot_path_html = f"/tmp/{filename_base}.html"
+        tmpdir = tempfile.gettempdir()
+        tapplot_path_png = os.path.join(tmpdir, f"{filename_base}.png")
+        tapplot_path_html = os.path.join(tmpdir, f"{filename_base}.html")
 
         # delete any old plots to avoid confusion
         if tapplot_path_html and os.path.exists(tapplot_path_html):
@@ -2160,7 +2152,8 @@ class ProbeEddy:
             t0 = time.time()
             try:
                 fig.write_image(tapplot_path_png)
-            except:
+            except Exception:
+                logging.exception("EDDYng: failed to write tap plot PNG (kaleido missing?)")
                 tapplot_path_png = None
             timg = time.time() - t0
         if tapplot_path_html:
@@ -2408,7 +2401,7 @@ class ProbeEddyEndstopWrapper:
         try:
             if self._sampler is not None:
                 self._sampler.finish()
-        except:
+        except Exception:
             logging.exception("EDDYng handle_command_error: sampler.finish() failed")
 
     def setup_pin(self, pin_type, pin_params):
@@ -3136,7 +3129,7 @@ class ProbeEddyFrequencyMap:
             yaxis3=dict(overlaying="y", side="right", position=0.1),
             yaxis4=dict(overlaying="y", side="right", position=0.2),
         )
-        fig.write_html("/tmp/eddy-calibration.html")
+        fig.write_html(os.path.join(tempfile.gettempdir(), "eddy-calibration.html"))
 
     def freq_to_height(self, freq: float) -> float:
         if self._ftoh is None:
@@ -3288,7 +3281,8 @@ class BedMeshScanHelper:
             # heights, the other is "offset from real"
             heights = [h + self._eddy._tap_offset for h in heights]
 
-            with open("/tmp/mesh.csv", "w") as mfile:
+            mesh_csv_path = os.path.join(tempfile.gettempdir(), "mesh.csv")
+            with open(mesh_csv_path, "w") as mfile:
                 mfile.write("time,x,y,z\n")
                 for i in range(len(self._mesh_points)):
                     t = path_times[i]

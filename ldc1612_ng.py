@@ -10,16 +10,8 @@ import struct
 from dataclasses import dataclass
 from typing import List, Optional
 
-try:
-    from klippy.extras import bus, bulk_sensor
-    from klippy.printer import Printer
-
-    IS_KALICO = True
-except ImportError:
-    from . import bus, bulk_sensor
-    from klippy import Printer
-
-    IS_KALICO = False
+from . import bus, bulk_sensor
+from klippy import Printer
 
 MIN_MSG_TIME = 0.100
 
@@ -47,12 +39,8 @@ REG_DRIVE_CURRENT0 = 0x1E
 REG_MANUFACTURER_ID = 0x7E
 REG_DEVICE_ID = 0x7F
 
-# Device product (match sensor_ldc1612_ng.c)
-PRODUCT_UNKNOWN = 0
+# Device product (match sensor_ldc1612_ng.c). Only BTT Eddy is supported in this fork.
 PRODUCT_BTT_EDDY = 1
-PRODUCT_CARTOGRAPHER = 2
-PRODUCT_MELLOW_FLY = 3
-PRODUCT_LDC1612_INTERNAL_CLK = 4
 
 HOME_MODE_NONE = 0
 HOME_MODE_HOME = 1
@@ -82,43 +70,19 @@ class LDC1612_ng:
         self._name = config.get_name().split()[-1]
         self._verbose = config.getboolean("debug", False)
 
-        device_choices = {
-            "ldc1612": PRODUCT_UNKNOWN,
-            "btt_eddy": PRODUCT_BTT_EDDY,
-            "cartographer": PRODUCT_CARTOGRAPHER,
-            "mellow_fly": PRODUCT_MELLOW_FLY,
-            "ldc1612_internal_clk": PRODUCT_LDC1612_INTERNAL_CLK,
-        }
-        self._device_product = config.getchoice("sensor_type", device_choices, PRODUCT_UNKNOWN)
+        # Only btt_eddy is supported in this fork. Accept the literal string
+        # so we still validate the config field, but pin the product.
+        config.getchoice("sensor_type", {"btt_eddy": "btt_eddy"})
+        self._device_product = PRODUCT_BTT_EDDY
 
+        # BTT Eddy uses an external 12 MHz clock source.
         # Fin0 = Fsensor0 / FIN_DIVIDER0
         # Fref0 = Fclk / FREF_DIVIDER0
-        if self._device_product == PRODUCT_CARTOGRAPHER:
-            self._ldc_freq_clk = 24_000_000
-            self._ldc_fin_divider = 1
-            self._ldc_fref_divider = 1
-            self._ldc_settle_time = 0.0001706
-            self._default_drive_current = 26
-        elif self._device_product == PRODUCT_MELLOW_FLY:
-            self._ldc_freq_clk = 40_000_000
-            self._ldc_fin_divider = 1
-            self._ldc_fref_divider = 2
-            self._ldc_settle_time = 0.00125
-            self._default_drive_current = 15
-        elif self._device_product == PRODUCT_LDC1612_INTERNAL_CLK:
-            # A generic setup that usees internal LDC1612 clock
-            # using LDC1612 internal typical clock frequency 43.4MHz
-            self._ldc_freq_clk = 43_400_000
-            self._ldc_fin_divider = 1
-            self._ldc_fref_divider = 1
-            self._ldc_settle_time = 0.00125
-            self._default_drive_current = 15
-        else:  # Generic/BTT Eddy using external 12MHz clock source
-            self._ldc_freq_clk = 12_000_000
-            self._ldc_settle_time = 0.005
-            self._ldc_fin_divider = 1
-            self._ldc_fref_divider = 1
-            self._default_drive_current = 15
+        self._ldc_freq_clk = 12_000_000
+        self._ldc_settle_time = 0.005
+        self._ldc_fin_divider = 1
+        self._ldc_fref_divider = 1
+        self._default_drive_current = 15
 
         self._ldc_freq_ref = round(self._ldc_freq_clk / self._ldc_fref_divider)
 
@@ -220,10 +184,8 @@ class LDC1612_ng:
         toolhead.dwell(0.100)
         toolhead.wait_moves()
         old_config = self.read_reg(REG_CONFIG)
-        if (self._device_product == PRODUCT_LDC1612_INTERNAL_CLK):
-            self.set_reg(REG_CONFIG, 0x001)
-        else:
-            self.set_reg(REG_CONFIG, 0x001 | (1 << 9))
+        # BTT Eddy uses an external clock source: REF_CLK_SRC=clkin (bit 9).
+        self.set_reg(REG_CONFIG, 0x001 | (1 << 9))
         toolhead.wait_moves()
         toolhead.dwell(0.100)
         toolhead.wait_moves()
@@ -490,13 +452,8 @@ class LDC1612_ng:
         )
         self.set_reg(REG_ERROR_CONFIG, 0b1111_1100_1111_1001)  # report everything to STATUS and INTB except ZC
         self.set_reg(REG_MUX_CONFIG, 0x0208 | deglitch)
-        if (self._device_product == PRODUCT_LDC1612_INTERNAL_CLK):
-            # use internal oscillator
-            # RP_OVERRIDE_EN | AUTO_AMP_DIS | reserved
-            self.set_reg(REG_CONFIG, (1 << 12) | (1 << 10) | 0x001)
-        else:
-            # RP_OVERRIDE_EN | AUTO_AMP_DIS | REF_CLK_SRC=clkin | reserved
-            self.set_reg(REG_CONFIG, (1 << 12) | (1 << 10) | (1 << 9) | 0x001)
+        # BTT Eddy: RP_OVERRIDE_EN | AUTO_AMP_DIS | REF_CLK_SRC=clkin | reserved
+        self.set_reg(REG_CONFIG, (1 << 12) | (1 << 10) | (1 << 9) | 0x001)
         self.set_reg(REG_DRIVE_CURRENT0, self._drive_current << 11)
 
         self._chip_initialized = True
