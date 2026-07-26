@@ -1187,6 +1187,13 @@ class ProbeEddy:
         homing_req_max = 5.0
         tap_req_min = 0.025
         tap_req_max = 3.0
+        # Homing reads the sensor before it moves Z at all, from wherever the homing
+        # macro left the toolhead -- typically a z-hop well above _home_start_height
+        # and not knowable from here. The calibrated range is the only honest proxy,
+        # so prefer a homing drive current that covers it: homing_req_max alone lets
+        # a close-range current win on fit error and then fail the pre-move read with
+        # "Couldn't get any valid samples from sensor".
+        homing_pref_max = max(homing_req_max, self.params.calibration_z_max - 2.0)
 
         start_drive_current = drive_current
         end_drive_current = min(start_drive_current + max_dc_increase, 31)  # 31 is the LDC1612 hardware max
@@ -1236,7 +1243,10 @@ class ProbeEddy:
                     self._log_msg(f"calibration error rate is too high ({fth_rms}) at drive current {dc}.")
                     ok_for_homing = ok_for_tap = False
 
-            candidates[dc] = (mapping, fth_rms, ok_for_homing, ok_for_tap)
+            # see homing_pref_max: reaching homing_req_max is necessary but not sufficient
+            ok_for_homing_full = ok_for_homing and mapping.height_range[1] >= homing_pref_max
+
+            candidates[dc] = (mapping, fth_rms, ok_for_homing, ok_for_tap, ok_for_homing_full)
 
             # usable homing and tap dcs need not be the same dc; only count
             # tap dcs seen at or after the first homing-ok dc, matching the
@@ -1248,19 +1258,28 @@ class ProbeEddy:
             if fast_mode and have_homing and have_tap:
                 break
 
-        def best_dc(predicate_key: int) -> Optional[int]:
-            scored = [
-                (dc, fth_rms)
-                for dc, (_m, fth_rms, ok_h, ok_t) in candidates.items()
-                if (ok_h if predicate_key == 0 else ok_t) and fth_rms is not None
-            ]
+        # index into the candidates tuple: 2=ok_for_homing, 3=ok_for_tap, 4=ok_for_homing_full
+        OK_HOMING, OK_TAP, OK_HOMING_FULL = 2, 3, 4
+
+        def best_dc(ok_index: int) -> Optional[int]:
+            scored = [(dc, cand[1]) for dc, cand in candidates.items() if cand[ok_index] and cand[1] is not None]
             if not scored:
                 return None
             scored.sort(key=lambda x: x[1])
             return scored[0][0]
 
-        homing_dc = best_dc(0)
-        tap_dc = best_dc(1)
+        homing_dc = best_dc(OK_HOMING_FULL)
+        if homing_dc is None:
+            # nothing covers the calibrated range; fall back, but say so loudly
+            homing_dc = best_dc(OK_HOMING)
+            if homing_dc is not None:
+                self._log_warning(
+                    f"No drive current reads reliably up to {homing_pref_max:.1f}mm; using {homing_dc} for homing, "
+                    f"which is only valid to {candidates[homing_dc][0].height_range[1]:.3f}mm. Keep the z-hop in your "
+                    "homing macro below that height, or G28 will fail with "
+                    "'Couldn't get any valid samples from sensor'."
+                )
+        tap_dc = best_dc(OK_TAP)
 
         # Only mutate probe state on outcomes that also save it; a tap-only
         # result would otherwise leave half-configured in-memory state that a
@@ -1274,6 +1293,16 @@ class ProbeEddy:
                 self._dc_to_fmap[tap_dc] = candidates[tap_dc][0]
                 self._tap_drive_current = tap_dc
                 self._log_msg(f"using {tap_dc} for tap (fit={candidates[tap_dc][1]:.4f}).")
+                # The sweep is anchored at z=0 and cannot see below it, so a floor at
+                # the anchor is an upper bound, not a measurement. Tap needs error-free
+                # samples slightly past contact, which is exactly what we can't verify.
+                tap_floor = candidates[tap_dc][0].height_range[0]
+                if tap_floor > -0.05:
+                    self._log_warning(
+                        f"tap drive current {tap_dc} has no verified valid range below z=0 (floor {tap_floor:.3f}mm "
+                        "is where the sweep bottomed out, not where the sensor stops reading). If TAP fails with "
+                        "'Amplitude Error' near contact, the sensor coil is mounted too low."
+                    )
                 self._log_msg("Setup success. Please check whether homing works with G28 Z, then check if tap works with PROBE_EDDY_NG_TAP.")
             else:
                 self._log_error("Failed to find tap drive current, but homing is set up. (Have you checked the sensor height?)")
@@ -3076,8 +3105,12 @@ class ProbeEddyFrequencyMap:
         self.height_range = [min_height, max_height]
         self.freq_range = [min_freq, max_freq]
 
+        # A floor at the sweep's zero anchor is censored: the sweep cannot descend past
+        # where the toolhead was zeroed, so it bounds the true floor rather than measuring it.
+        floor_note = " (censored: sweep bottom)" if min_height <= 0.05 else ""
+
         self._eddy._log_msg(
-            f"Drive current {drive_current}: valid height: {min_height:.3f} to {max_height:.3f}, "
+            f"Drive current {drive_current}: valid height: {min_height:.3f}{floor_note} to {max_height:.3f}, "
             f"freq spread {freq_spread:.2f}% ({min_freq:.1f} - {max_freq:.1f}), "
             f"Fit {rmse_fth:.4f} ({rmse_htf:.2f})"
         )
