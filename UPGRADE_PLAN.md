@@ -115,8 +115,14 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   +1.96 σ and the trimmed mean by −0.08 σ. Secondary: §5.5 mesh-repeat delta should shrink
   by a similar fraction. No change to means expected.
 - **Effort:** a few lines in three functions. **Rollback:** trivial revert.
-- **Implemented 2026-07-26** behind `scan_use_trimmed_mean` (default `False`); flip the
-  default once field data confirms the simulated gain.
+- **Implemented 2026-07-26** behind `scan_use_trimmed_mean` (default `False`).
+- **Field result (18× `PROBE_STATIC` at ~5 mm, no motion between):** sd(median) 4.51 µm vs
+  sd(mean) 3.56 µm, ratio **1.266** against the Gaussian prediction of 1.253 — the
+  efficiency argument holds exactly. But the larger effect is *quantization*: the median
+  returned only **3 distinct values across 18 trials** (5.003 / 5.008 / 5.016, steps of
+  5 and 8 µm) where the mean returned 12. An order statistic always lands on an actual
+  sample, so the median inherits the sensor's height quantum in full; averaging over
+  dithered samples resolves below it. See 2.2 for where that quantum comes from.
 
 ### 1.3 Mesh robustness: NaN windows + capped neighbor fill
 
@@ -206,6 +212,16 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
 - **Validate:** §5.1 static stddev at scan rate should drop visibly; scan windows get
   fewer-but-quieter samples (12 vs 25) — mesh repeat delta (§5.5) must improve or hold.
 - **Effort:** medium-small. **Rollback:** set both new keys to 250.
+- **Field evidence (2026-07-26) — promoted, this is a bigger lever than assumed.** The
+  LDC1612's resolution is **RCOUNT-limited, not 28-bit-limited**: at `samples_per_second`
+  250 the driver writes `RCOUNT0 = 3049`, giving a frequency quantum of
+  `f_sensor/(16·RCOUNT)` ≈ **64.5 Hz** — while the 28-bit `freqval` LSB is 0.045 Hz, some
+  1400× finer and therefore irrelevant. At df/dh in the 6–15 kHz/mm range that quantum is
+  a **4–11 µm height grid**, and a repeat-measurement series at 5 mm showed exactly that
+  (median snapping to 5 and 8 µm steps). Halving the scan-phase rate doubles RCOUNT, which
+  *halves the grid* as well as cutting noise by the σ ∝ RCOUNT^-0.8 law — two independent
+  wins from one register write. The same computation confirms 2.1's other claim outright:
+  the true conversion rate is **246.0 Hz**, not the 250 assumed in the filter design.
 
 ---
 
