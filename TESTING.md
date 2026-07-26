@@ -9,7 +9,7 @@ Changes fall into three categories with different deployment costs:
 
 | Category | Files | What deployment needs |
 | --- | --- | --- |
-| Host Python | `probe_eddy_ng.py`, `ldc1612_ng.py` | sync + `RESTART` (symlink install: just `git pull` + `RESTART`) |
+| Host Python | `probe_eddy_ng.py`, `ldc1612_ng.py` | sync + `sudo systemctl restart klipper` (console `RESTART` does NOT reload code) |
 | MCU firmware | `eddy-ng/sensor_ldc1612_ng.c` | sync + rebuild + **reflash the Eddy's RP2040** |
 | Installer/infra | `install.py`, `install.sh`, docs | nothing on the printer (used at install time only) |
 
@@ -46,7 +46,9 @@ reinstall. (The installer now refuses Kalico trees by design — this fork is Kl
 
 ## 2. Restart and first checks (host-side changes)
 
-1. `RESTART` (Klipper restart is enough for Python changes; `FIRMWARE_RESTART` doesn't hurt).
+1. `sudo systemctl restart klipper` on the Pi. **A console `RESTART` is NOT enough** — klippy
+   caches imported extras modules in-process, so `RESTART`/`FIRMWARE_RESTART` re-read the config
+   but keep running the old Python code. Only a service restart reloads modules from disk.
 2. Watch the console for startup warnings. Two new behaviors to know about:
    - A **corrupt calibration blob no longer crashes startup** — it logs
      `calibration data ... is corrupt or unreadable, please recalibrate` instead. If you see
@@ -137,7 +139,7 @@ is "no metric regresses; the targeted metric improves."
 ## 6. Rollback
 
 - **Host Python:** on the Pi, `git -C ~/eddy-ng checkout <previous-sha>` (or `git revert`),
-  then `RESTART`. Symlinks make this instant.
+  then `sudo systemctl restart klipper`. Symlinks make this instant.
 - **Firmware:** reflash the previously built `klipper.uf2` (keep the old `out/klipper.uf2`
   renamed, e.g. `klipper-<sha>.uf2`, before each rebuild).
 - **Calibration:** upgrades that bump `calibration_version` invalidate stored calibrations
