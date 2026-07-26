@@ -237,6 +237,12 @@ class ProbeEddyParams:
     # When probing multiple points (not rapid scan), how long to delay at each probe point
     # before the scan_sample_time kicks in.
     scan_sample_time_delay: float = 0.050
+    # Estimator used to collapse a window of samples into one height, for scan
+    # and static reads. The median discards ~36% of the available statistical
+    # efficiency on Gaussian noise; a 10% trimmed mean recovers most of that
+    # while keeping the spike immunity the median was chosen for. Does not
+    # affect tap clustering, which has its own tap_use_median setting.
+    scan_use_trimmed_mean: bool = False
     # accepted for backward compatibility, currently unused
     calibration_points: int = 150
     # configuration for butterworth filter
@@ -306,6 +312,7 @@ class ProbeEddyParams:
 
         self.scan_sample_time = config.getfloat("scan_sample_time", self.scan_sample_time, above=0.0)
         self.scan_sample_time_delay = config.getfloat("scan_sample_time_delay", self.scan_sample_time_delay, minval=0.0)
+        self.scan_use_trimmed_mean = config.getboolean("scan_use_trimmed_mean", self.scan_use_trimmed_mean)
 
         # for 'butter'
         self.tap_butter_lowcut = config.getfloat("tap_butter_lowcut", self.tap_butter_lowcut, above=0.0)
@@ -375,11 +382,23 @@ class ProbeEddyParams:
             )
 
 
+def _trimmed_mean(values, trim: float = 0.10) -> float:
+    # Mean of the middle (1 - 2*trim) of the sorted values. Falls back to the
+    # median when trimming would leave fewer than one sample.
+    v = np.sort(np.asarray(values, dtype=float))
+    n = v.size
+    k = int(math.ceil(trim * n))
+    if n - 2 * k < 1:
+        return float(np.median(v))
+    return float(np.mean(v[k : n - k]))
+
+
 @dataclass
 class ProbeEddyProbeResult:
     samples: List[float]
     mean: float = 0.0
     median: float = 0.0
+    trimmed: float = 0.0
     min_value: float = 0.0
     max_value: float = 0.0
     tstart: float = 0.0
@@ -387,6 +406,8 @@ class ProbeEddyProbeResult:
     errors: int = 0
 
     USE_MEAN_FOR_VALUE: ClassVar[bool] = False
+    # mirrors params.scan_use_trimmed_mean; set once at ProbeEddy init
+    USE_TRIMMED_FOR_VALUE: ClassVar[bool] = False
 
     @property
     def valid(self):
@@ -394,7 +415,9 @@ class ProbeEddyProbeResult:
 
     @property
     def value(self):
-        return self.mean if self.USE_MEAN_FOR_VALUE else self.median
+        if self.USE_MEAN_FOR_VALUE:
+            return self.mean
+        return self.trimmed if self.USE_TRIMMED_FOR_VALUE else self.median
 
     @property
     def stddev(self):
@@ -410,6 +433,7 @@ class ProbeEddyProbeResult:
             samples=h.tolist(),
             mean=float(np.mean(h)),
             median=float(np.median(h)),
+            trimmed=_trimmed_mean(h),
             min_value=float(np.min(h)),
             max_value=float(np.max(h)),
             tstart=float(times[0]),
@@ -425,6 +449,9 @@ class ProbeEddyProbeResult:
         if self.USE_MEAN_FOR_VALUE:
             value = f"{self.mean:.3f}"
             extra = f"med={self.median:.3f}"
+        elif self.USE_TRIMMED_FOR_VALUE:
+            value = f"{self.trimmed:.3f}"
+            extra = f"med={self.median:.3f}, avg={self.mean:.3f}"
         else:
             value = f"{self.median:.3f}"
             extra = f"avg={self.mean:.3f}"
@@ -453,6 +480,7 @@ class ProbeEddy:
 
         self.params = ProbeEddyParams()
         self.params.load_from_config(config)
+        ProbeEddyProbeResult.USE_TRIMMED_FOR_VALUE = self.params.scan_use_trimmed_mean
 
         # figure out if either of these comes from the autosave section
         # so we can sort out what we want to write out later on
@@ -2849,10 +2877,14 @@ class ProbeEddySampler:
                 # no samples in this range
                 raise self._printer.command_error(f"No samples in time range {iv_start}-{iv_end}")
 
-            median = np.median(heights[istart:iend])
-            interval_heights.append(float(median))
+            interval_heights.append(self._window_value(heights[istart:iend]))
 
         return interval_heights
+
+    def _window_value(self, values) -> float:
+        if self.eddy.params.scan_use_trimmed_mean:
+            return _trimmed_mean(values)
+        return float(np.median(values))
 
     def find_height_at_time(self, start_time, end_time):
         if end_time < start_time:
@@ -2886,12 +2918,12 @@ class ProbeEddySampler:
             raise self._printer.command_error(f"no samples between time {start_time:.1f} and {end_time:.1f}!")
         hmin, hmax = np.min(heights), np.max(heights)
         mean = np.mean(heights)
-        median = np.median(heights)
+        value = self._window_value(heights)
         self.eddy._log_debug(
-            f"find_height_at_time: {len(heights)} samples, median: {median:.3f}, mean: {mean:.3f} (range {hmin:.3f}-{hmax:.3f})"
+            f"find_height_at_time: {len(heights)} samples, value: {value:.3f}, mean: {mean:.3f} (range {hmin:.3f}-{hmax:.3f})"
         )
 
-        return float(median)
+        return value
 
 
 @final

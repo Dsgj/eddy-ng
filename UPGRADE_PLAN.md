@@ -106,9 +106,17 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   N < 3 → plain mean/median). Keep `USE_MEDIAN`/`tap_use_median` semantics for tap
   clustering untouched — this item is only the *within-window* estimator. Report per-point
   stddev alongside mesh values while validating.
-- **Validate:** baseline §5.1/§5.2 stddev should drop ~20–30 % at identical scan time;
-  §5.5 mesh-repeat delta should shrink. No change to means expected.
+- **Validate (corrected 2026-07-26):** *not* the bracketed stddev `PROBE_ACCURACY` prints —
+  that is the spread of samples about the centre and barely moves when the centre changes.
+  Measure estimator noise directly: run `PROBE_EDDY_NG_PROBE_STATIC` ~10× at a fixed
+  height, take the spread of the reported values, flag off vs on. Monte-Carlo at N=25
+  Gaussian: median sd 0.2477 → trimmed 0.2070 → mean 0.2006, i.e. 16 % tighter than median
+  and within 3 % of the unattainable plain mean, while a 50 σ spike moves the mean by
+  +1.96 σ and the trimmed mean by −0.08 σ. Secondary: §5.5 mesh-repeat delta should shrink
+  by a similar fraction. No change to means expected.
 - **Effort:** a few lines in three functions. **Rollback:** trivial revert.
+- **Implemented 2026-07-26** behind `scan_use_trimmed_mean` (default `False`); flip the
+  default once field data confirms the simulated gain.
 
 ### 1.3 Mesh robustness: NaN windows + capped neighbor fill
 
