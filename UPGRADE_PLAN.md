@@ -64,6 +64,16 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   be justified against the post-shim baseline, not the old one.
 - **Phase 5 is unmeasured.** A tap-series drift initially read as thermal turned out to be
   a QGL step. Run the §5 cold-vs-soaked experiment (no code) before committing to 5.1.
+- **Homing repeatability is ~1 µm — do not chase it.** Eight full `G28` cycles, each read
+  at commanded Z=3.0 (so homing error shows up as a sensor/commanded mismatch): sd
+  **1.04 µm**, total range 3 µm. A natural hypothesis — that the `ftoh`/`htof` round-trip
+  disagreement inflates homing scatter and therefore tap run-to-run spread — is **refuted**.
+  Round-trip disagreement is a systematic *bias*, not variance, so a repeatability test
+  cannot see it, and tap re-references Z anyway. 3.1 still earns its ranking on the
+  starved-fit robustness evidence above, but not on homing repeatability.
+- **Sensor noise is height-dependent; measure at operating height.** Per-window sample
+  spread was ~5 µm at 3 mm versus 9–17 µm at 5 mm (sensitivity is ~5× higher near the bed).
+  Any noise figure taken at 5 mm overstates what the printer actually experiences.
 
 ---
 
