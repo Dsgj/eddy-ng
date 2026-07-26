@@ -1,5 +1,8 @@
 # eddy-ng upgrade plan
 
+*See also: [README.md](README.md) for what this fork changes · [TESTING.md](TESTING.md) for the
+deploy and baseline-measurement procedure every item here validates against.*
+
 Implementation roadmap for the 12 algorithm/technique upgrades identified by the
 2026-07-24 research pass (5 web researchers + ground-truth code analysis + synthesis
 judge, ranked by expected accuracy/reliability gain ÷ implementation risk). This plan

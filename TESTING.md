@@ -1,5 +1,8 @@
 # Deploying and testing eddy-ng changes
 
+*See also: [README.md](README.md) for what this fork changes · [UPGRADE_PLAN.md](UPGRADE_PLAN.md)
+for the algorithm backlog and its field evidence.*
+
 This repo has no test suite and cannot run outside a Klipper host — the printer *is* the
 test rig. This document is the standard procedure for getting working-tree changes onto
 the printer, verifying them, and recording the baseline measurements that
