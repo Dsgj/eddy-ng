@@ -1849,17 +1849,20 @@ class ProbeEddy:
 
         times = np.asarray(sampler.times)
         heights = np.asarray(sampler.heights)
-        # one extra window-length of lead-in so the approach segment is well determined
-        window = (times >= t0 - span) & (times <= t1 + 0.2 * span)
+        # Lead-in of one window length so the approach segment is well determined, and
+        # stop at the trigger: past it the toolhead is decelerating into target_z, and
+        # that slope change is far larger than the contact one, so a wider window just
+        # finds the end of the move.
+        window = (times >= t0 - span) & (times <= t1)
         t = times[window]
         y = heights[window]
-        if t.size < 12:
+        if t.size < 8:
             return None
 
         ones = np.ones_like(t)
         best = None
         # interior knees only, so both segments keep enough points to be determined
-        for tb in t[4:-4]:
+        for tb in t[3:-3]:
             design = np.column_stack((ones, t, np.maximum(t - tb, 0.0)))
             coef = np.linalg.lstsq(design, y, rcond=None)[0]
             resid = design @ coef - y
