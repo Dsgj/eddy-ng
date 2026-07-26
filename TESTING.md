@@ -90,12 +90,19 @@ make KCONFIG_CONFIG=eddy.config
 ### Bootloader offset must match what is on the device
 
 Getting this wrong produces firmware that will not boot and needs physical BOOT-button
-recovery. Check for katapult first:
+recovery. Check for katapult first — and note that a katapult query only sees nodes
+*already in bootloader mode*, so an empty result while Klipper is running proves nothing:
 
 ```bash
-python3 ~/katapult/scripts/flashtool.py -i can0 -q     # CAN boards
-ls /dev/serial/by-id/                                   # USB boards
+sudo service klipper stop
+~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0    # what app is running
+python3 ~/katapult/scripts/flashtool.py -i can0 -u <uuid> -r      # ask it to enter bootloader
+python3 ~/katapult/scripts/flashtool.py -i can0 -q                # now it appears iff katapult exists
 ```
+
+If the final query lists the UUID, katapult is installed. If not, the board runs bare
+Klipper and only the BOOT-button UF2 route can flash it. (`-r` is safe either way: with no
+katapult the board simply resets back into Klipper.) USB boards: `ls /dev/serial/by-id/`.
 
 | Device state | Bootloader offset | Flash with |
 | --- | --- | --- |
