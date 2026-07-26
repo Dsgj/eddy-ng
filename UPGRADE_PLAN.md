@@ -93,6 +93,13 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
 - **Changing `tap_time_position` shifts absolute Z zero (~30 µm from 0.3 → 0.7).** It is a
   repeatability fix, not a free lunch: re-tune the first layer via `tap_adjust_z` after
   adopting a new value.
+- **A *more* sensitive `tap_threshold` was more repeatable — the intuition is backwards.**
+  Raising it toward the `butter` default (150 → 250) *doubled* scatter: 6.5 µm pooled over
+  three runs at 150 versus 13.1 µm at 250, with mean overshoot rising 18 → 24 µm. A higher
+  threshold triggers later, landing further into the event where the toolhead is already
+  pushing into the plate and the signal reflects mechanical compliance rather than the
+  contact transition. Sweep this parameter empirically; do not reason about it from
+  "sensitivity means noise".
 - **Phase 5 is unmeasured.** A tap-series drift initially read as thermal turned out to be
   a QGL step. Run the §5 cold-vs-soaked experiment (no code) before committing to 5.1.
 - **Homing repeatability is ~1 µm — do not chase it.** Eight full `G28` cycles, each read
