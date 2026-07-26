@@ -13,7 +13,9 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install ruff
-        run: pip install ruff
+        # pinned: an unpinned install silently changes what CI enforces whenever
+        # ruff ships new defaults (0.15 -> 0.16 added 127 findings here)
+        run: pip install ruff==0.16.0
       - name: Ruff check
         run: ruff check .
       - name: Syntax check

@@ -1,2 +1,15 @@
 line-length = 140
 indent-width = 4
+
+[lint]
+# Pin the rule set explicitly. Ruff's *default* selection is not stable across
+# releases -- 0.16 added UP/C4/LOG/BLE/SIM/PIE to its defaults, which turned CI
+# red on 127 findings in unchanged code. Widening what we enforce should be a
+# deliberate decision, not a side effect of a linter upgrade.
+#
+# This is ruff's historical default set. Several of the newly-default rules also
+# fight Klipper conventions rather than improving anything: LOG015 flags
+# `logging.info()` on the root logger, which is how every Klipper extra logs,
+# and BLE001 flags the deliberate blind excepts guarding diagnostics so they can
+# never fail a probe.
+select = ["E4", "E7", "E9", "F"]
