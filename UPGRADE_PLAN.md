@@ -41,6 +41,32 @@ depends on what precedes it.
 
 ---
 
+## Field evidence (2026-07-26 hardware session) — read before picking an item
+
+A full deploy + validation session on the Voron 2.4r2 changed several premises below.
+
+- **Baselines are now real.** The pre-session numbers were measured against a sensor coil
+  mounted 0.44 mm too low and should be discarded. Post-shim baseline: `PROBE_ACCURACY`
+  scale factor 0.995 over 0.5–5.0 mm with ±10 µm residual nonlinearity and a constant
+  −0.07 mm reference offset; stddev 0.006; tap 11 µm run-to-run, 4–5 µm within-run.
+- **3.1 got direct supporting evidence.** With near-bed samples dropped as amplitude
+  errors, the degree-9 fit had no data below 0.793 mm and rang across its *entire*
+  domain — an 8.4 % scale error at 5 mm, far from the missing region. High-order
+  polynomial fits distort globally when they lose an endpoint. A monotone PCHIP map
+  cannot do this, which raises 3.1's value above its original ranking.
+- **2.1's headline justification weakened.** That 8.4 % error was initially attributed to
+  timestamp lag; it was the starved fit, and the error vanished on recalibration with
+  clean data. The ~2 ms centroid bias is still real and still worth fixing before any
+  recalibration-heavy work, but do not expect it to move accuracy much on a healthy mount.
+- **3.2 is partially delivered** (commit `77f34ad`) — see that item for what remains.
+- **Phase 4 has less headroom than assumed.** Tap already reaches 4–5 µm within-run on a
+  correctly mounted sensor. 4.1 is passive logging and still free to start; 4.2/4.3 should
+  be justified against the post-shim baseline, not the old one.
+- **Phase 5 is unmeasured.** A tap-series drift initially read as thermal turned out to be
+  a QGL step. Run the §5 cold-vs-soaked experiment (no code) before committing to 5.1.
+
+---
+
 ## Phase 1 — Quick wins (independent, host-only, individually revertible)
 
 ### 1.1 Apply the tap drift offset in the frequency domain
@@ -148,6 +174,11 @@ depends on what precedes it.
   shrink to < 1 ms equivalent. Homing trigger height (measure with a tap right after G28)
   should move by roughly the predicted ~10 µm.
 - **Effort:** small code, medium validation. **Rollback:** revert; recalibrate again.
+- **Revised expectation (2026-07-26):** a field gain error once attributed to this turned
+  out to be a starved polynomial fit, and it disappeared on recalibration with clean data.
+  The centroid bias is still physically real and still belongs before the Phase 3 recal,
+  but treat it as correctness hygiene rather than an accuracy win. Do 3.1 first if you
+  only have appetite for one calibration-touching change.
 
 ### 2.2 Per-phase sample rates (host-only stage)
 
@@ -200,6 +231,12 @@ depends on what precedes it.
   §5.3 tap spread should not regress.
 - **Effort:** the largest single host-side item. **Rollback:** default flag back to
   polynomial; v5 calibrations still load.
+- **Field evidence (2026-07-26):** observed in the wild — a degree-9 fit starved of data
+  below 0.793 mm produced an 8.4 % scale error at 5 mm, i.e. the distortion appeared far
+  from the missing data, not near it. Binned medians + PAVA + PCHIP are structurally
+  immune: a missing endpoint degrades only the endpoint interval. This makes 3.1 the
+  highest-value item in the plan, ahead of its original ranking, and it is the one change
+  that would keep a marginal mount from silently corrupting the whole height map.
 
 ### 3.2 Drive-current sweep rework (SETUP)
 
@@ -224,6 +261,15 @@ depends on what precedes it.
   currents rather than pick them.
 - **Effort:** medium; touches `cmd_SETUP_next` + `ldc1612_ng.py` batch path.
   **Rollback:** keep the RMS scorer behind `SETUP FAST=1`-style flag.
+- **Partially delivered in `77f34ad` (2026-07-26)**, after SETUP twice picked a drive
+  current that could not read at the homing macro's z-hop and broke `G28` outright
+  ("Couldn't get any valid samples from sensor"): homing candidates must now cover
+  `calibration_z_max - 2.0` rather than a flat 5.0 mm, with a warned fallback; calibration
+  floors that bottom out at the sweep's zero anchor are annotated `(censored: sweep
+  bottom)` instead of masquerading as measured; and a tap drive current with no verified
+  range below z=0 now warns and names the likely cause. **Still to do:** per-kind error
+  tallies in `_process_batch`, amplitude-error disqualification, noise-in-mm scoring
+  (needs 3.1's map for |dz/df|), and `INIT_IDRIVE` seeding of the sweep range.
 
 ---
 
