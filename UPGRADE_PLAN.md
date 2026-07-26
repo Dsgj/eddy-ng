@@ -93,6 +93,13 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
 - **Changing `tap_time_position` shifts absolute Z zero (~30 µm from 0.3 → 0.7).** It is a
   repeatability fix, not a free lunch: re-tune the first layer via `tap_adjust_z` after
   adopting a new value.
+- **Baseline repeatability is ~2 µm; the spread is rare bad dives, so the rejection gate
+  matters more than any estimator.** Final-config run: five of seven runs inside a 4 µm
+  band (sd 1.8 µm), the other two at +23 and −13 µm. The +23 came from a single dive 25 µm
+  out whose run stddev (0.012) slipped under a 0.015 `tap_samples_stddev` gate — tighten to
+  0.010 with `tap_max_samples` headroom. Note an sd from n=7 carries ~±30 %: identical
+  settings produced 4.0 / 6.7 / 8.9 / 11.2 µm across four runs, so do not tune on one
+  series. Also watch surface wear — a test spot can take 100+ contacts in one session.
 - **A *more* sensitive `tap_threshold` was more repeatable — the intuition is backwards.**
   Raising it toward the `butter` default (150 → 250) *doubled* scatter: 6.5 µm pooled over
   three runs at 150 versus 13.1 µm at 250, with mean overshoot rising 18 → 24 µm. A higher
