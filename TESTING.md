@@ -62,21 +62,50 @@ reinstall. (The installer now refuses Kalico trees by design — this fork is Kl
 The current batch **does** change firmware (SOS bounds check, 64-bit WMA, `is_tap`
 predicate fix, descriptive shutdowns, debug wiring), so a reflash is required for those
 fixes to be live. Host and firmware stay wire-compatible either way — no constants or
-message formats changed — so an unflashed Eddy keeps working with old behavior.
+message formats changed — so an unflashed Eddy keeps working with old behavior. None of
+the firmware fixes affect tap or homing accuracy, so a reflash is never urgent — do it as
+its own step, not in the middle of debugging something else.
+
+**There is no `WANT_EDDY_NG` menuconfig option on Klipper.** `eddy-ng/Kconfig` is the
+Kalico plugin path. On Klipper the installer patches `src/Makefile` so
+`sensor_ldc1612_ng.c` builds under `CONFIG_WANT_LDC1612` (default enabled). Confirm the
+patch survived any Klipper update before building:
+
+```bash
+grep sensor_ldc1612_ng ~/klipper/src/Makefile   # must print the patched src-$(CONFIG_WANT_LDC1612) line
+```
+
+Build into a separate config file so you don't clobber the `.config` for your main board:
 
 ```bash
 cd ~/klipper
-make clean
-make menuconfig   # Micro-controller: Raspberry Pi RP2040; USB communication
-make
+make menuconfig KCONFIG_CONFIG=eddy.config
+#   Micro-controller Architecture: Raspberry Pi RP2040
+#   Communication interface: CAN bus (BTT Eddy CAN: RX 4, TX 5, 1000000) or USB (USB Eddy)
+#   Bootloader offset: MUST match the device — see below
+make clean KCONFIG_CONFIG=eddy.config
+make KCONFIG_CONFIG=eddy.config
 ```
 
-Flash the BTT Eddy (RP2040, pick one):
+### Bootloader offset must match what is on the device
 
-- **UF2 (always works):** unplug the Eddy's USB, hold its BOOT button while plugging back
-  in → a `RPI-RP2` drive appears → copy `out/klipper.uf2` onto it. It reboots into Klipper.
-- **Katapult:** if the Eddy has katapult installed,
-  `make flash FLASH_DEVICE=/dev/serial/by-id/<your-eddy-id>`.
+Getting this wrong produces firmware that will not boot and needs physical BOOT-button
+recovery. Check for katapult first:
+
+```bash
+python3 ~/katapult/scripts/flashtool.py -i can0 -q     # CAN boards
+ls /dev/serial/by-id/                                   # USB boards
+```
+
+| Device state | Bootloader offset | Flash with |
+| --- | --- | --- |
+| katapult installed (CAN) | 16KiB | `flashtool.py -i can0 -u <uuid> -f out/klipper.bin` |
+| katapult installed (USB) | 16KiB | `make flash KCONFIG_CONFIG=eddy.config FLASH_DEVICE=<by-id path>` |
+| no bootloader | No bootloader | BOOT button + copy `out/klipper.uf2` to the `RPI-RP2` drive |
+
+Stop Klipper before a CAN flash (`sudo service klipper stop`), start it after. The UF2
+route always works regardless of offset, but flashing a "No bootloader" build over an
+existing katapult erases katapult — after that every future update needs the BOOT button.
 
 Then `FIRMWARE_RESTART` and confirm the MCU version updated (`STATUS` or the MCU section
 in Mainsail/Fluidd).
