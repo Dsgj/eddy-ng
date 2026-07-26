@@ -1833,14 +1833,17 @@ class ProbeEddy:
             tap_end_time=tap_end_time,
         )
 
-    def _tap_hinge_fit(self, tap: ProbeEddy.TapResult):
-        # Fit a continuous two-segment model y = a + b*t + c*max(0, t - tb) to the
-        # height trace across the tap window and return the knee. Before contact the
-        # coil closes on the bed at the dive rate; once the nozzle lands, the bed
-        # deflects with it and the closing rate changes -- the knee is that moment.
-        # Returns (position_in_window, knee_height, rms_residual) or None.
+    def _tap_hinge_fit(self, tap: ProbeEddy.TapResult, tap_speed: float):
+        # Locate the contact knee by fitting a quadratic baseline plus a hinge,
+        #   f = a + b*t + c*t^2 + d*max(0, t - tb)
+        # to the raw *frequency* trace. Frequency, not height: below the calibrated
+        # floor the height map is degree-9 extrapolation that turns over around
+        # -0.25mm, which a piecewise-linear fit reads as a large spurious knee. The
+        # quadratic term absorbs the genuine curvature of freq-vs-height over the
+        # window so the hinge only has the contact discontinuity left to explain.
+        # Returns (position_in_window, mm_above_trigger, rms_hz) or None.
         sampler = self._last_sampler
-        if sampler is None or not sampler.times or not sampler.heights:
+        if sampler is None or not sampler.times or not sampler.freqs:
             return None
         t0, t1 = tap.tap_start_time, tap.tap_end_time
         span = t1 - t0
@@ -1848,47 +1851,52 @@ class ProbeEddy:
             return None
 
         times = np.asarray(sampler.times)
-        heights = np.asarray(sampler.heights)
+        freqs = np.asarray(sampler.freqs)
         # Lead-in of one window length so the approach segment is well determined, and
         # stop at the trigger: past it the toolhead is decelerating into target_z, and
         # that slope change is far larger than the contact one, so a wider window just
         # finds the end of the move.
         window = (times >= t0 - span) & (times <= t1)
-        t = times[window]
-        y = heights[window]
+        # center both axes -- absolute print_time and ~3.1MHz condition the fit badly
+        t = times[window] - t0
+        y = freqs[window]
         if t.size < 8:
             return None
+        y = y - y[0]
 
-        ones = np.ones_like(t)
+        design_base = np.column_stack((np.ones_like(t), t, t * t))
         best = None
         # interior knees only, so both segments keep enough points to be determined
         for tb in t[3:-3]:
-            design = np.column_stack((ones, t, np.maximum(t - tb, 0.0)))
+            design = np.column_stack((design_base, np.maximum(t - tb, 0.0)))
             coef = np.linalg.lstsq(design, y, rcond=None)[0]
             resid = design @ coef - y
             sse = float(resid @ resid)
             if best is None or sse < best[0]:
-                best = (sse, float(tb), float(coef[0] + coef[1] * tb))
+                best = (sse, float(tb))
 
         if best is None:
             return None
-        sse, tb, knee_height = best
-        return (tb - t0) / span, knee_height, math.sqrt(sse / t.size)
+        sse, tb = best
+        # how far above the trigger point contact was, in mm at the dive rate --
+        # directly comparable to the scatter of the reported tap z
+        mm_above_trigger = (span - tb) * tap_speed
+        return tb / span, mm_above_trigger, math.sqrt(sse / t.size)
 
-    def _log_tap_hinge(self, tap: ProbeEddy.TapResult):
+    def _log_tap_hinge(self, tap: ProbeEddy.TapResult, tap_speed: float):
         # Diagnostic only: must never be able to fail a tap.
         try:
-            fit = self._tap_hinge_fit(tap)
+            fit = self._tap_hinge_fit(tap, tap_speed)
         except Exception as e:
             self._log_debug(f"tap hinge fit failed: {e}")
             return
         if fit is None:
             return
-        position, knee_height, rms = fit
+        position, mm_above_trigger, rms = fit
         self._log_msg(
             f"tap hinge: contact at {position:.3f} of window "
             f"(tap_time_position={self.params.tap_time_position:.2f}), "
-            f"knee height {knee_height:.4f}, fit rms {rms:.4f}"
+            f"{mm_above_trigger:.4f}mm above trigger, fit rms {rms:.1f}Hz"
         )
 
     def _compute_butter_tap(self, sampler):
@@ -2050,7 +2058,7 @@ class ProbeEddy:
                         self._log_error(f"Failed to write tap plot: {e}")
 
                 if self.params.tap_log_hinge and not tap.error:
-                    self._log_tap_hinge(tap)
+                    self._log_tap_hinge(tap, tap_speed)
 
                 if tap.error:
                     if "too close to target z" in str(tap.error):
