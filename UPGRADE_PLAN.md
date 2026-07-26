@@ -395,6 +395,27 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   points) and that τ is produced on > 90 % of taps with sane gate pass rates.
 - **Effort:** small-medium. **Rollback:** delete the log line.
 
+> **VERDICT 2026-07-26: Phase 4 is closed — do not build 4.2 or 4.3 on this machine.**
+> Two field rounds with the shadow fit:
+>
+> 1. *Height domain* — every knee pinned at −0.2549 mm ± 9 µm, a quarter mm below where
+>    taps report contact, while its position in time scattered −0.19 to +0.40. That is not
+>    contact; it is the degree-9 map turning over below its calibrated floor. Independent
+>    third strike against polynomial extrapolation (see 3.1).
+> 2. *Frequency domain, quadratic baseline + hinge* (map-independent) — per-dive scatter
+>    **12.6 µm** versus the current method's 3–10 µm, with fit RMS averaging **54 Hz**
+>    against a ~64 Hz sensor quantum. The model fits to the noise floor; it is
+>    noise-limited, not mis-specified.
+>
+> Reading 12.6 µm back through the pre-screen table gives a post-contact closing rate of
+> **~0.9× the approach rate** — the nozzle landing changes the coil's approach by only
+> ~10 %. There is no sharp corner to find, so no fitting method can beat a tuned constant
+> here. A machine with a compliant bed (thin sheet, soft magnetic mat) may differ; re-run
+> the shadow fit before assuming this verdict transfers.
+>
+> Practical outcome: `tap_time_position = 0.7` at 6.7 µm run-to-run is at or near the
+> achievable limit for this hardware.
+
 ### 4.2 Contact fit, stage B: active, with fallback
 
 - **How:** once stage-A logs show τ stable and plausible:
