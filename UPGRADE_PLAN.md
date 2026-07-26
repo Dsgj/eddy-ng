@@ -59,9 +59,19 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   clean data. The ~2 ms centroid bias is still real and still worth fixing before any
   recalibration-heavy work, but do not expect it to move accuracy much on a healthy mount.
 - **3.2 is partially delivered** (commit `77f34ad`) — see that item for what remains.
-- **Phase 4 has less headroom than assumed.** Tap already reaches 4–5 µm within-run on a
-  correctly mounted sensor. 4.1 is passive logging and still free to start; 4.2/4.3 should
-  be justified against the post-shim baseline, not the old one.
+- **Phase 4 is the ONLY item with measurable headroom — and try config before code.**
+  8-run `TAP_REPEATABILITY` at bed centre, post-QGL: run-to-run sd **18.6 µm**, range 51 µm
+  (discarding one anomalous run). That is 19× the 1 µm homing repeatability and the
+  dominant term in the whole Z chain. Decomposition points at the interpolation itself:
+  `probe_z` (reported, interpolated at `tap_time_position` = 0.3) scatters **18.6 µm** while
+  `finish_z` (where the toolhead physically stopped) scatters only **11.1 µm** — the
+  latency correction is *adding* ~15 µm of variance instead of removing it. Note the
+  tempting +0.86 correlation between `tap_z` and `overshoot` is constructional
+  (`overshoot = probe_z - finish_z`) and must not be cited as evidence; the two standard
+  deviations are the real signal. **Before building 4.2/4.3, sweep `tap_time_position`
+  (0.3 → 0.5 → 0.7) and `tap_samples_stddev` (0.020 → 0.015) — zero code, and if scatter
+  falls toward 11 µm it beats every Phase 1–2 item combined.** Within-run spread is 4–16 µm
+  and individual dives show occasional ~50 µm outliers, so 3 of 8 runs needed a 4th sample.
 - **Phase 5 is unmeasured.** A tap-series drift initially read as thermal turned out to be
   a QGL step. Run the §5 cold-vs-soaked experiment (no code) before committing to 5.1.
 - **Homing repeatability is ~1 µm — do not chase it.** Eight full `G28` cycles, each read
