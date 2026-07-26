@@ -72,6 +72,27 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   (0.3 → 0.5 → 0.7) and `tap_samples_stddev` (0.020 → 0.015) — zero code, and if scatter
   falls toward 11 µm it beats every Phase 1–2 item combined.** Within-run spread is 4–16 µm
   and individual dives show occasional ~50 µm outliers, so 3 of 8 runs needed a 4th sample.
+- **RESULT — the sweep worked; 4.2/4.3 are probably unnecessary.** Three 8-run series:
+
+  | `tap_time_position` | run-to-run sd | range | within-run sd | overshoot |
+  | --- | --- | --- | --- | --- |
+  | 0.3 (default) | 18.6 µm | 51 µm | 9.5 µm | 44 µm |
+  | 0.5 | 6.9 µm | 20 µm | 7.1 µm | 31 µm |
+  | 0.7 | **6.7 µm** | 19 µm | 6.6 µm | 21 µm |
+
+  **2.8× tighter from one config float**, with every secondary metric improving monotonically.
+  The default 0.3 is simply wrong for this gantry/dive-speed combination. Before building
+  the hinge-fit contact model (4.2) on any machine, sweep this parameter first — the fixed
+  linear interpolation is not inherently broken, it was mis-parameterised.
+- **Do not read run 1 of a tap series as an outlier.** In each series the first tap read
+  ~-130 µm while the rest read ~0. That is not an anomaly: run 1 measures the offset
+  between `G28`'s frequency-threshold zero and true contact — the thing tap exists to
+  correct — and it then *sets* Z=0, so every later tap in the series is measuring an
+  already-tapped zero and reports ~0 by construction. Runs 2..N therefore give tap-to-tap
+  repeatability (the number above); run 1 gives the homing-vs-contact offset.
+- **Changing `tap_time_position` shifts absolute Z zero (~30 µm from 0.3 → 0.7).** It is a
+  repeatability fix, not a free lunch: re-tune the first layer via `tap_adjust_z` after
+  adopting a new value.
 - **Phase 5 is unmeasured.** A tap-series drift initially read as thermal turned out to be
   a QGL step. Run the §5 cold-vs-soaked experiment (no code) before committing to 5.1.
 - **Homing repeatability is ~1 µm — do not chase it.** Eight full `G28` cycles, each read
