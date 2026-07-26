@@ -229,6 +229,11 @@ class ProbeEddyParams:
     # but you may want to adjust this for your configuration. This is a number
     # in the range of 0.0 to 1.0.
     tap_time_position: float = 0.3
+    # Diagnostic: alongside each tap, fit a two-segment (hinge) model to the
+    # height trace and log where it puts contact. Answers whether one fixed
+    # tap_time_position is adequate for this machine. Never changes the
+    # reported tap -- it is a shadow measurement only.
+    tap_log_hinge: bool = False
 
     # When probing multiple points (not rapid scan), how long to sample for at each probe point,
     # after a scan_sample_time_delay delay. The total dwell time at each probe point is
@@ -335,6 +340,7 @@ class ProbeEddyParams:
             above=0.0,
         )
         self.tap_time_position = config.getfloat("tap_time_position", self.tap_time_position, minval=0.0, maxval=1.0)
+        self.tap_log_hinge = config.getboolean("tap_log_hinge", self.tap_log_hinge)
 
         if self.tap_trigger_safe_start_height == -1.0:  # sentinel
             self.tap_trigger_safe_start_height = self.home_trigger_height / 2.0
@@ -1827,6 +1833,61 @@ class ProbeEddy:
             tap_end_time=tap_end_time,
         )
 
+    def _tap_hinge_fit(self, tap: ProbeEddy.TapResult):
+        # Fit a continuous two-segment model y = a + b*t + c*max(0, t - tb) to the
+        # height trace across the tap window and return the knee. Before contact the
+        # coil closes on the bed at the dive rate; once the nozzle lands, the bed
+        # deflects with it and the closing rate changes -- the knee is that moment.
+        # Returns (position_in_window, knee_height, rms_residual) or None.
+        sampler = self._last_sampler
+        if sampler is None or not sampler.times or not sampler.heights:
+            return None
+        t0, t1 = tap.tap_start_time, tap.tap_end_time
+        span = t1 - t0
+        if span <= 0.0:
+            return None
+
+        times = np.asarray(sampler.times)
+        heights = np.asarray(sampler.heights)
+        # one extra window-length of lead-in so the approach segment is well determined
+        window = (times >= t0 - span) & (times <= t1 + 0.2 * span)
+        t = times[window]
+        y = heights[window]
+        if t.size < 12:
+            return None
+
+        ones = np.ones_like(t)
+        best = None
+        # interior knees only, so both segments keep enough points to be determined
+        for tb in t[4:-4]:
+            design = np.column_stack((ones, t, np.maximum(t - tb, 0.0)))
+            coef = np.linalg.lstsq(design, y, rcond=None)[0]
+            resid = design @ coef - y
+            sse = float(resid @ resid)
+            if best is None or sse < best[0]:
+                best = (sse, float(tb), float(coef[0] + coef[1] * tb))
+
+        if best is None:
+            return None
+        sse, tb, knee_height = best
+        return (tb - t0) / span, knee_height, math.sqrt(sse / t.size)
+
+    def _log_tap_hinge(self, tap: ProbeEddy.TapResult):
+        # Diagnostic only: must never be able to fail a tap.
+        try:
+            fit = self._tap_hinge_fit(tap)
+        except Exception as e:
+            self._log_debug(f"tap hinge fit failed: {e}")
+            return
+        if fit is None:
+            return
+        position, knee_height, rms = fit
+        self._log_msg(
+            f"tap hinge: contact at {position:.3f} of window "
+            f"(tap_time_position={self.params.tap_time_position:.2f}), "
+            f"knee height {knee_height:.4f}, fit rms {rms:.4f}"
+        )
+
     def _compute_butter_tap(self, sampler):
         if not scipy:
             return None, None
@@ -1984,6 +2045,9 @@ class ProbeEddy:
                         self._write_tap_plot(tap, attempt - 1)
                     except Exception as e:
                         self._log_error(f"Failed to write tap plot: {e}")
+
+                if self.params.tap_log_hinge and not tap.error:
+                    self._log_tap_hinge(tap)
 
                 if tap.error:
                     if "too close to target z" in str(tap.error):

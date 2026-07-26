@@ -351,6 +351,31 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
 
 ### 4.1 Contact fit, stage A: log-only hinge fit
 
+> **Implemented 2026-07-26** behind `tap_log_hinge` (default `False`). Fits
+> `y = a + b·t + c·max(0, t − tb)` to the height trace over
+> `[tap_start − span, trigger + 0.2·span]`, grid-searching `tb` over interior samples, and
+> logs the knee as a fraction of the tap window plus the knee height and fit RMS. Purely
+> diagnostic — wrapped so it can never fail a tap. Height (not frequency) is the right
+> domain: a constant-velocity dive is linear in height and curved in frequency.
+>
+> **Pre-screen simulation — the payoff is entirely contingent on contact sharpness.**
+> Z-scatter of the hinge estimate at 3 mm/s, 246 Hz, 40 samples, vs how far the closing
+> rate drops at contact (1.00 = no change, 0.00 = bed fully follows the nozzle):
+>
+> | post-contact rate | 1 µm noise | 2 µm | 3 µm | 5 µm |
+> | --- | --- | --- | --- | --- |
+> | 0.90 | 6.9 µm | 17.0 | 26.0 | 50.3 |
+> | 0.75 | 2.0 µm | 6.1 | 7.9 | 14.3 |
+> | 0.50 | 0.0 µm | 0.0 | 4.1 | 7.6 |
+> | 0.25 | 0.0 µm | 0.0 | 1.7 | 4.6 |
+>
+> Tuned `tap_time_position` already delivers 6.7 µm, so **4.2 is only worth building if the
+> logs show a sharp knee** (low fit RMS, tight knee-position scatter). A shallow knee means
+> the hinge fit is *worse* than the tuned constant. Read the logs before deciding.
+> One caveat the logs will also expose: below the calibrated floor the height trace is
+> polynomial extrapolation, so it may not be linear there — a high fit RMS may indict the
+> map rather than the contact model.
+
 - **Why:** the single biggest fudge in the Z=0 path is `tap_time_position = 0.3`: contact
   time is guessed as 30 % of the way between two *filter-delayed* timestamps (both carry
   15–30 ms of 5–25 Hz bandpass group delay). Klipper mainline solved the identical
