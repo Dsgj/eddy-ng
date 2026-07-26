@@ -4,16 +4,15 @@
 # Copyright (C) 2025  Vladimir Vukicevic <vladimir@pobox.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import math
 import logging
 import struct
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from . import bus, bulk_sensor
-from klippy import Printer
 
-MIN_MSG_TIME = 0.100
+if TYPE_CHECKING:
+    from klippy import Printer
 
 BATCH_UPDATES = 0.100
 
@@ -65,7 +64,7 @@ class LDC1612_ng_homing_result:
 # Interface class to LDC1612 mcu support
 class LDC1612_ng:
     def __init__(self, config):
-        self.printer: Printer = config.get_printer()
+        self.printer: "Printer" = config.get_printer()
 
         self._name = config.get_name().split()[-1]
         self._verbose = config.getboolean("debug", False)
@@ -146,7 +145,9 @@ class LDC1612_ng:
             self._finish_measurements,
             BATCH_UPDATES,
         )
-        hdr = ("time", "frequency", "z")
+        # Rows are (time, freqval): raw 28-bit encoded values with error
+        # samples filtered out; Hz = freqval * freqval_conversion_value()
+        hdr = ("time", "freqval")
         self._batch_bulk.add_mux_endpoint("ldc1612_ng/dump_ldc1612", "sensor", self._name, {"header": hdr})
 
         gcode = self.printer.lookup_object("gcode")
@@ -234,12 +235,10 @@ class LDC1612_ng:
             cq=cmdqueue,
         )
 
-        if hasattr(self._mcu, "register_serial_response"):
-            # infuriating: these used to be able to be registered for optional
-            # things (that the firmware never sends)
-            #self._mcu.register_serial_response(self._handle_debug_print, "debug_print m=%*s")
-            pass
-        else:
+        # Newer Klipper (with register_serial_response) rejects registering
+        # messages the firmware doesn't declare, so debug_print is only
+        # hooked up on older Klipper.
+        if not hasattr(self._mcu, "register_serial_response"):
             self._mcu.register_response(self._handle_debug_print, "debug_print")
 
     def _handle_debug_print(self, params):
@@ -262,20 +261,12 @@ class LDC1612_ng:
     def add_bulk_sensor_data_client(self, cb):
         self._batch_bulk.add_client(cb)
 
-    def latched_status(self):
-        response = self._ldc1612_ng_latched_status_cmd.send([self._oid])
-        return response["status"]
-
-    def latched_status_str(self):
-        s = self.latched_status()
-        return self.status_to_str(s)
-
     def status_to_str(self, s: int):
         status_bits = [
-            "0",
-            "1",
-            "2",
+            "UNREADCONV3",
+            "UNREADCONV2",
             "UNREADCONV1",
+            "UNREADCONV0",
             "4",
             "5",
             "DRDY",
@@ -296,13 +287,15 @@ class LDC1612_ng:
         return " ".join(flags)
 
     def data_error_to_str(self, d: int):
+        # error flags live in bits 31:28 of the raw sample; after the shift
+        # bit0=AE, bit1=WD, bit2=OR, bit3=UR (matches SAMPLE_ERR_* in firmware)
         err_bits = [
-            "Under-range Error",
-            "Over-range Error",
-            "Watchdog Error",
             "Amplitude Error",
+            "Watchdog Error",
+            "Over-range Error",
+            "Under-range Error",
         ]
-        d = d >> 12  # shift out the data bits
+        d = d >> 28  # shift out the data bits
         errors = []
         for bit, err in enumerate(err_bits):
             if d & (1 << bit):
@@ -355,6 +348,15 @@ class LDC1612_ng:
         if mode_val is None:
             raise self.printer.command_error(f"Invalid mode: {mode}")
 
+        # err_max travels as a %c (single byte) wire field; out-of-range values
+        # would silently truncate mod 256 on the MCU
+        if not 0 <= max_errors <= 255:
+            raise self.printer.command_error(f"max_errors must be between 0 and 255 (got {max_errors})")
+        # tap_threshold is encoded as 16.16 fixed point in an int32; values outside
+        # (0, 32767] overflow the encoding or trigger an instant false tap
+        if tap_threshold is not None and not (0.0 < tap_threshold <= 32767.0):
+            raise self.printer.command_error(f"tap_threshold must be greater than 0 and at most 32767 (got {tap_threshold})")
+
         t_freqvl = self.to_ldc_freqval(trigger_freq)
         s_freqval = self.to_ldc_freqval(start_freq)
         start_time_mcu = self._mcu.print_time_to_clock(start_time) if start_time > 0 else 0
@@ -388,7 +390,7 @@ class LDC1612_ng:
         return self._clock32_to_print_time(c)
 
     def finish_home(self):
-        # "ldc1612_finish_home2_reply oid=%c homing=%c trigger_clock=%u tap_start_clock=%u",
+        # reply: "ldc1612_ng_finish_home_reply oid=%c trigger_clock=%u tap_start_clock=%u error=%u"
         reply = self._ldc1612_ng_finish_home_cmd.send([self._oid])
         trigger_clock = reply["trigger_clock"]
         tap_start_clock = reply["tap_start_clock"]
@@ -435,7 +437,7 @@ class LDC1612_ng:
         elif self._deglitch == "33mhz":
             deglitch = DEGLITCH_33MHZ
         else:
-            raise self.printer.error(f"Invalid {self._name} deglitch value: {self._deglitch}")
+            raise self.printer.command_error(f"Invalid {self._name} deglitch value: {self._deglitch}")
 
         # This is the TI-recommended register configuration order
         # Setup chip in requested query rate
@@ -458,9 +460,6 @@ class LDC1612_ng:
 
         self._chip_initialized = True
 
-    def get_deglitch(self):
-        return self.read_reg(REG_MUX_CONFIG) & ~0x0208
-
     def set_deglitch(self, val: int):
         logging.info(f"LDC1612ng {self._name} deglitch set {val}")
         self.set_reg(REG_MUX_CONFIG, val | 0x0208)
@@ -468,21 +467,11 @@ class LDC1612_ng:
     def get_drive_current(self) -> int:
         return self._drive_current
 
-    def set_drive_current(self, cval: int, maxfreq: float = None):
+    def set_drive_current(self, cval: int):
         if cval < 0 or cval > 31:
             raise self.printer.command_error("Drive current must be between 0 and 31")
         if self._drive_current == cval:
             return
-
-        if maxfreq is not None:
-            if maxfreq < 1_000_000.0:
-                self.set_deglitch(DEGLITCH_1_0MHZ)
-            elif maxfreq < 3_300_000.0:
-                self.set_deglitch(DEGLITCH_3_3MHZ)
-            elif maxfreq < 10_000_000.0:
-                self.set_deglitch(DEGLITCH_10MHZ)
-            else:
-                self.set_deglitch(DEGLITCH_33MHZ)
 
         logging.info(f"LDC1612ng {self._name} set drive current {cval}")
         self._drive_current = cval

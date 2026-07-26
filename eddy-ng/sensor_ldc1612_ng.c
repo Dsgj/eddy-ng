@@ -18,6 +18,12 @@
 #include "sensor_bulk.h" // sensor_bulk_report
 #include "trsync.h" // trsync_do_trigger
 
+// The WANT_EDDY_NG_DEBUG Kconfig option (eddy-ng/Kconfig) also compiles the
+// vendored printf.c that dprint() links against.
+#if !defined(LDC_DEBUG) && defined(CONFIG_WANT_EDDY_NG_DEBUG) && CONFIG_WANT_EDDY_NG_DEBUG
+#define LDC_DEBUG 1
+#endif
+
 #if !defined(LDC_DEBUG)
 #define LDC_DEBUG 0
 #endif
@@ -419,6 +425,13 @@ void dprint(const char *fmt, ...)
     int len = vsnprintf(buf, sizeof(buf)-1, fmt, args);
     va_end(args);
 
+    // vsnprintf returns the would-be length; on truncation (or error) clamp
+    // it so sendf doesn't read past the formatted contents of buf
+    if (len < 0)
+        len = 0;
+    else if (len > (int)sizeof(buf) - 2)
+        len = (int)sizeof(buf) - 2;
+
     sendf("debug_print m=%*s", len, buf);
 }
 #endif
@@ -450,6 +463,10 @@ command_ldc1612_ng_setup_home(uint32_t *args)
         return;
     }
 
+    // Look up the new session's trsync before the error guards below, so
+    // they notify it instead of dereferencing a stale (or NULL) ld->ts.
+    ld->ts = trsync_oid_lookup(trsync_oid);
+
     if (ld->rest_ticks == 0) {
         notify_trigger(ld, 0, other_reason_base);
         dprint("ZZZ sensor not started!");
@@ -471,7 +488,6 @@ command_ldc1612_ng_setup_home(uint32_t *args)
 
     lh->error_threshold = err_max;
 
-    ld->ts = trsync_oid_lookup(trsync_oid);
     ld->success_reason = trigger_reason;
     ld->other_reason_base = other_reason_base;
 
@@ -487,6 +503,8 @@ command_ldc1612_ng_setup_home(uint32_t *args)
         dprint("ZZZ setup wma sf=%u tf=%u tap=%u", start_freq, trigger_freq, tap_threshold);
         break;
     case HOME_MODE_SOS:
+        if (ld->sos_filter.num_sections == 0)
+            shutdown("ldc1612_ng: sos tap with no sos filter configured");
         lh->sos_tap.tap_threshold = tap_threshold / 65536.0f;
         dprint("ZZZ setup sos sf=%u tf=%u tap=%f", start_freq, trigger_freq, lh->sos_tap.tap_threshold);
         break;
@@ -576,7 +594,7 @@ windowed_moving_average_u32(uint32_t* buf, uint8_t buf_size, uint8_t start_i)
     uint64_t wma_sum = 0;
     for (uint8_t i = 0; i < buf_size; i++) {
         uint8_t j = (start_i + i) % buf_size;
-        wma_sum += buf[j] * (i+1);
+        wma_sum += (uint64_t)buf[j] * (i+1);
     }
 
     uint32_t freq_weight_sum = (buf_size * (buf_size + 1)) / 2;
@@ -633,7 +651,7 @@ check_error(struct ldc1612_ng* ld, uint32_t data, uint32_t time)
         return true;
     }
 
-    uint8_t is_tap = lh->mode > 0;
+    uint8_t is_tap = lh->mode > HOME_MODE_HOME;
 
     // Ignore amplitude too high errors for homing,
     // because this is generally the probe being very
@@ -664,6 +682,9 @@ bool
 check_safe_start(struct ldc1612_ng* ld, uint32_t data, uint32_t time)
 {
     struct ldc1612_ng_homing *lh = &ld->homing;
+    // Deliberately mode > 0 (always true when called), not > HOME_MODE_HOME:
+    // plain homing also takes the two-threshold swap below, and current
+    // homing trigger behavior depends on it. Don't "fix" this predicate.
     uint8_t is_tap = lh->mode > 0;
 
     if (lh->safe_start_freq == 0)
@@ -824,8 +845,10 @@ check_sos_tap(struct ldc1612_ng* ld, uint32_t data, uint32_t time)
     // if we haven't even hit the safe_start_freq
     if (lh->homing_trigger_freq != 0) {
         sos_tap->frequency_offset = freq;
+        // check_safe_start can only return true here if safe_start_freq was
+        // never set, i.e. setup_home was sent with start_freq=0
         if (check_safe_start(ld, data, time))
-            shutdown("bug"); // this should never return true in here
+            shutdown("ldc1612_ng: sos tap requires a nonzero start_freq");
         return;
     }
 
@@ -874,6 +897,10 @@ command_ldc1612_ng_set_sos_section(uint32_t *args)
     uint8_t* data = command_decode_ptr(args[3]);
     if (values_len != 4*6) {
         shutdown("ldc1612_ng: wrong sos section length");
+    }
+
+    if (section >= MAX_SOS_SECTIONS) {
+        shutdown("ldc1612_ng: sos section index too large");
     }
 
     // these commands need to come in order of increasing section

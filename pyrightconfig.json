@@ -1,3 +1,4 @@
 {
-    "reportOptionalMemberAccess": false
+    "reportOptionalMemberAccess": false,
+    "reportMissingImports": false
 }

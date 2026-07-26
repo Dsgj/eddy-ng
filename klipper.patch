@@ -1,3 +1,15 @@
+This file documents the TWO changes install.py makes (via sed) to a stock
+Klipper tree; it is reference documentation, not what the installer applies:
+
+1. src/Makefile -- compile sensor_ldc1612_ng.c alongside sensor_ldc1612.c
+   (under CONFIG_WANT_LDC1612).
+2. klippy/extras/bed_mesh.py -- recognize eddy-ng probes as scanning probes
+   so BED_MESH_CALIBRATE METHOD=rapid_scan works (replaces the stock
+   probe_eddy_current name check; the "#eddy-ng" marker is what the
+   uninstaller's reverse sed keys off).
+
+Line numbers drift with upstream Klipper; install.py patches by content.
+
 diff --git src/Makefile src/Makefile
 index cfedc56f7..422e0179e 100644
 --- a/src/Makefile
@@ -10,3 +22,15 @@ index cfedc56f7..422e0179e 100644
 +src-$(CONFIG_WANT_LDC1612) += sensor_ldc1612.c sensor_ldc1612_ng.c
  src-$(CONFIG_WANT_SENSOR_ANGLE) += sensor_angle.c
  src-$(CONFIG_NEED_SENSOR_BULK) += sensor_bulk.c
+diff --git klippy/extras/bed_mesh.py klippy/extras/bed_mesh.py
+--- a/klippy/extras/bed_mesh.py
++++ b/klippy/extras/bed_mesh.py
+@@ -869,7 +869,7 @@
+         pprobe = self.printer.lookup_object("probe", None)
+         if pprobe is not None:
+             probe_name = pprobe.get_status(None).get("name", "")
+-            can_scan = probe_name.startswith("probe_eddy_current")
++            can_scan = "eddy" in probe_name #eddy-ng
+         if method == "rapid_scan" and can_scan:
+             self.rapid_scan_helper.perform_rapid_scan(gcmd)
+         else:

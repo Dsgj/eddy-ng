@@ -1,6 +1,8 @@
 # eddy-ng
 
-> ***Note: October 2025 -- life has gotten quite busy lately, so I've been much slower to respond to issues and make updates. Apologies, will get back to it soon!***
+> **Fork notice:** This repository is a fork of [vvuk/eddy-ng](https://github.com/vvuk/eddy-ng) that is locked to **Klipper only** (Kalico support has been removed) and to the **BTT Eddy / BTT Eddy Duo** sensors only (`sensor_type: btt_eddy`; Cartographer, Mellow Fly, and generic LDC1612 support have been removed). If you run Kalico or a different sensor, use upstream eddy-ng instead. The [upstream wiki](https://github.com/vvuk/eddy-ng/wiki) setup docs still apply for BTT Eddy on Klipper, but ignore its Kalico and non-BTT sensor sections.
+
+> **_Upstream note: October 2025 -- life has gotten quite busy lately, so I've been much slower to respond to issues and make updates. Apologies, will get back to it soon!_**
 
 eddy-ng improves the Eddy current probe support in Klipper to add accurate Z-offset setting by physically making contact with the build surface. These probes are very accurate, but suffer from drifts due to changes in conductivity in the target surface as well as changes in coil parameters as temperatures change. Instead of doing temperature compensation (which is guesswork at best), eddy-ng takes a more physical approach:
 
@@ -19,11 +21,11 @@ You can also file issues in [this `eddy-ng` github repo](https://github.com/vvuk
 
 ## Installation
 
-1. Clone this repository:
+1. Clone this repository (this fork, not upstream):
 
 ```
 cd ~
-git clone https://github.com/vvuk/eddy-ng
+git clone https://github.com/Dsgj/eddy-ng
 ```
 
 2. Run the install script:
@@ -46,4 +48,3 @@ cd ~/eddy-ng
 git pull
 ./install.sh
 ```
-

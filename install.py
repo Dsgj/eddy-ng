@@ -97,9 +97,15 @@ def install_klipper(target_dir: str, uninstall: bool, copy: bool):
 
         if copy:
             print(f"Copying {src_file} to {dest_dir}/")
-            shutil.copyfile(src_file, dest_file)
+            # remove a pre-existing file/symlink so we don't write through a
+            # symlink left over from an earlier default-mode install
+            if os.path.islink(dest_file) or os.path.exists(dest_file):
+                os.remove(dest_file)
+            shutil.copyfile(src_path, dest_file)
         else:
-            link_path = os.path.relpath(os.path.realpath(src_path), dest_path)
+            # realpath both sides: relpath is lexical, so a symlinked target_dir
+            # (e.g. ~/klipper -> elsewhere) would otherwise yield dangling links
+            link_path = os.path.relpath(os.path.realpath(src_path), os.path.realpath(dest_path))
             print(f"Linking {link_path} to {dest_dir}/")
             if os.path.islink(dest_file) or os.path.exists(dest_file):
                 os.remove(dest_file)
@@ -133,8 +139,6 @@ def main():
         home_dir = str(Path.home())
         if os.path.isdir(os.path.join(home_dir, "klipper")):
             target_dir = os.path.join(home_dir, "klipper")
-        elif os.path.isdir(os.path.join(home_dir, "kalico")):
-            target_dir = os.path.join(home_dir, "kalico")
         else:
             print("Error: No target directory provided and no default directories found.")
             parser.print_help()
@@ -145,6 +149,11 @@ def main():
         sys.exit(1)
 
     if os.path.exists(os.path.join(target_dir, "klippy/extras/danger_options.py")):
+        if not uninstall:
+            print("Error: this fork of eddy-ng is Klipper-only; Kalico is not supported.")
+            print("Point the installer at a Klipper tree.")
+            sys.exit(1)
+        # keep uninstall working so pre-fork Kalico installs can still be cleaned up
         install_kalico(target_dir, uninstall, copy)
     else:
         install_klipper(target_dir, uninstall, copy)

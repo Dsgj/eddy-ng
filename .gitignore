@@ -6,3 +6,4 @@
 *.orig
 *.rej
 CLAUDE.md
+__pycache__/
