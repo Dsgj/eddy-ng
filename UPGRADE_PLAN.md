@@ -217,11 +217,20 @@ A full deploy + validation session on the Voron 2.4r2 changed several premises b
   250 the driver writes `RCOUNT0 = 3049`, giving a frequency quantum of
   `f_sensor/(16·RCOUNT)` ≈ **64.5 Hz** — while the 28-bit `freqval` LSB is 0.045 Hz, some
   1400× finer and therefore irrelevant. At df/dh in the 6–15 kHz/mm range that quantum is
-  a **4–11 µm height grid**, and a repeat-measurement series at 5 mm showed exactly that
-  (median snapping to 5 and 8 µm steps). Halving the scan-phase rate doubles RCOUNT, which
-  *halves the grid* as well as cutting noise by the σ ∝ RCOUNT^-0.8 law — two independent
-  wins from one register write. The same computation confirms 2.1's other claim outright:
-  the true conversion rate is **246.0 Hz**, not the 250 assumed in the filter design.
+  a height grid whose size depends strongly on where you measure. **Scope correction:** the
+  grid is ~5 µm at 5 mm but only **~1.05 µm at scanning height** (measured from gaps in a
+  real bed mesh: df/dh ≈ 61.5 kHz/mm near the bed vs ≈ 12.9 kHz/mm at 5 mm). Since nothing
+  operates at 5 mm, the *grid* half of this item is worth well under a micron — do not
+  justify 2.2 on quantization. The **noise** half still stands on its own: σ ∝ RCOUNT^-0.8
+  applied to a ~13 µm per-sample spread is what actually moves the estimator, and it is one
+  register write with no calibration or firmware impact. The same computation confirms
+  2.1's other claim outright: the true conversion rate is **246.0 Hz**, not the 250 assumed
+  in the filter design.
+- **Methodological warning for anyone validating this area:** do not compare estimators by
+  the sd of repeated static reads. A quantized estimator (the median) snaps to the grid and
+  reports *lower* sd when the true value happens to sit on a level — observed swinging
+  between 1.81 µm and 4.51 µm across two runs minutes apart, purely from grid alignment,
+  while the mean held 3.56–3.83 µm. That is resolution loss impersonating precision.
 
 ---
 
