@@ -46,7 +46,7 @@ measures around it:
 | **Only `sensor_type: btt_eddy`** | Cartographer, Mellow Fly, `ldc1612_internal_clk` and generic LDC1612 branches are deleted from host and firmware. The firmware shuts down with "unsupported product" for other product codes. |
 | **Diverges from upstream** | You will not automatically receive upstream fixes, and merging them back will conflict — expect conflicts in the import block, `LDC1612_ng.__init__`'s product setup, and the product `switch` in `command_config_ldc1612_ng`. |
 | **Firmware reflash required** | The C changes need a rebuild and reflash to take effect. Host and firmware stay wire-compatible, so an unflashed sensor keeps working with the old behavior. |
-| **Community support assumes upstream** | The Discord and upstream issue tracker are staffed by people running upstream. Report fork-specific problems [here](https://github.com/Dsgj/eddy-ng/issues) instead. |
+| **Community support assumes upstream** | The Discord and upstream issue tracker are staffed by people running upstream. Report fork-specific problems on [this fork's issue tracker](https://github.com/Dsgj/eddy-ng/issues) instead. |
 
 ### Which should you use?
 
